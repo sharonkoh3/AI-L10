@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Canvas Ship</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: #111;
+      font-family: Arial, sans-serif;
+    }
+
+    canvas {
+      display: block;
+      background: black;
+      border: 1px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const ship = {
+      width: 40,
+      height: 20,
+      speed: 6,
+      x: canvas.width / 2 - 20,
+      y: canvas.height - 40
+    };
+
+    const keys = {
+      left: false,
+      right: false,
+      shoot: false
+    };
+
+    const playerBullets = [];
+    const invaderBullets = [];
+    let lives = 3;
+    const highScoreKey = 'canvasShipHighScore';
+    const savedHighScore = Number(localStorage.getItem(highScoreKey));
+    let score = 0;
+    let highScore = Number.isFinite(savedHighScore) && savedHighScore > 0 ? savedHighScore : 0;
+    let playerShotCooldown = 0;
+    let invaderShotTimer = 0;
+    let playerInvulnerableTime = 0;
+    let gameStarted = false;
+    let gameOver = false;
+    let gameWon = false;
+    let waitingMessage = 'PRESS ANY KEY TO START';
+    const fireworks = [];
+    let fireworkTimer = 0;
+
+    const invaderDesigns = [
+      [
+        ['100000001', '010000010', '001111100', '011202110', '111111111', '101101101', '010010010'],
+        ['100000001', '010000010', '001111100', '011202110', '111111111', '010101010', '101000101']
+      ],
+      [
+        ['001111100', '011111110', '110202011', '111111111', '011111110', '010110010', '110000011'],
+        ['001111100', '011111110', '110202011', '111111111', '011111110', '110110011', '010000010']
+      ],
+      [
+        ['000101000', '001111100', '011111110', '111202111', '111111111', '010110010', '101000101'],
+        ['001010100', '001111100', '011111110', '111202111', '111111111', '101110101', '010000010']
+      ],
+      [
+        ['001111100', '011111110', '111111111', '110202011', '111111111', '001010100', '010101010'],
+        ['001111100', '011111110', '111111111', '110202011', '111111111', '010101000', '101010100']
+      ],
+      [
+        ['001111100', '011111110', '111111111', '110202011', '111111111', '001000100', '010101010'],
+        ['001111100', '011111110', '111111111', '110202011', '111111111', '001000100', '010101000']
+      ]
+    ];
+
+    const invaderState = {
+      rows: 5,
+      cols: 10,
+      width: 36,
+      height: 28,
+      paddingX: 30,
+      paddingY: 24,
+      direction: 1,
+      speed: 48,
+      drop: 18,
+      alive: []
+    };
+
+    const kraken = {
+      x: 0,
+      y: 72,
+      width: 280,
+      height: 210,
+      direction: 1,
+      speed: 80,
+      hitsRemaining: 67
+    };
+    let bossActive = false;
+
+    const invaderRowColors = ['#FF4D4D', '#FF9F43', '#FFE66D', '#54E38E', '#5DA9FF'];
+
+    function createInvaders() {
+      invaderState.alive = [];
+      const formationWidth = invaderState.cols * invaderState.width +
+        (invaderState.cols - 1) * invaderState.paddingX;
+      const startX = (canvas.width - formationWidth) / 2;
+      const startY = 60;
+
+      for (let row = 0; row < invaderState.rows; row++) {
+        for (let col = 0; col < invaderState.cols; col++) {
+          invaderState.alive.push({
+            x: startX + col * (invaderState.width + invaderState.paddingX),
+            y: startY + row * (invaderState.height + invaderState.paddingY),
+            row,
+            width: invaderState.width,
+            height: invaderState.height,
+            frame: 0
+          });
+        }
+      }
+    }
+
+    function saveHighScore() {
+      highScore = Math.max(highScore, score);
+      localStorage.setItem(highScoreKey, String(highScore));
+    }
+
+    function resetGame() {
+      score = 0;
+      lives = 3;
+      playerShotCooldown = 0;
+      invaderShotTimer = 0;
+      playerInvulnerableTime = 0;
+      gameStarted = false;
+      gameOver = false;
+      gameWon = false;
+      ship.x = canvas.width / 2 - ship.width / 2;
+      keys.left = false;
+      keys.right = false;
+      keys.shoot = false;
+      playerBullets.length = 0;
+      invaderBullets.length = 0;
+      invaderState.direction = 1;
+      bossActive = false;
+      kraken.hitsRemaining = 67;
+      fireworks.length = 0;
+      fireworkTimer = 0;
+      createInvaders();
+    }
+
+    function startKraken() {
+      bossActive = true;
+      kraken.x = canvas.width / 2 - kraken.width / 2;
+      kraken.direction = 1;
+      kraken.hitsRemaining = 67;
+      invaderShotTimer = 0;
+      invaderBullets.length = 0;
+    }
+
+    function drawInvader(invader, frameIndex) {
+      const sprite = invaderDesigns[invader.row][frameIndex % invaderDesigns[invader.row].length];
+      const cellSize = 4;
+
+      for (let row = 0; row < sprite.length; row++) {
+        for (let col = 0; col < sprite[row].length; col++) {
+          if (sprite[row][col] === '0') continue;
+
+          const px = invader.x + col * cellSize;
+          const py = invader.y + row * cellSize;
+
+          ctx.fillStyle = sprite[row][col] === '2' ? 'black' : invaderRowColors[invader.row];
+          ctx.fillRect(px, py, cellSize, cellSize);
+        }
+      }
+    }
+
+    function updateInvaders(deltaTime) {
+      const step = invaderState.speed * deltaTime * invaderState.direction;
+      let hitEdge = false;
+
+      for (const invader of invaderState.alive) {
+        invader.x += step;
+
+        if (invader.x <= 10 || invader.x + invader.width >= canvas.width - 10) {
+          hitEdge = true;
+        }
+      }
+
+      if (hitEdge) {
+        invaderState.direction *= -1;
+
+        for (const invader of invaderState.alive) {
+          invader.y += invaderState.drop;
+        }
+      }
+    }
+
+    function updateKraken(deltaTime) {
+      kraken.x += kraken.speed * deltaTime * kraken.direction;
+
+      if (kraken.x <= 10 || kraken.x + kraken.width >= canvas.width - 10) {
+        kraken.direction *= -1;
+        kraken.x = Math.max(10, Math.min(canvas.width - kraken.width - 10, kraken.x));
+      }
+    }
+
+    function updateShip() {
+      if (keys.left) {
+        ship.x -= ship.speed;
+      }
+
+      if (keys.right) {
+        ship.x += ship.speed;
+      }
+
+      ship.x = Math.max(0, Math.min(canvas.width - ship.width, ship.x));
+    }
+
+    function rectanglesOverlap(a, b) {
+      return a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y;
+    }
+
+    function fireInvaderBullet() {
+      if (bossActive) {
+        for (const [horizontalSpeed, horizontalOffset] of [[-130, -18], [0, 0], [130, 18]]) {
+          invaderBullets.push({
+            x: kraken.x + kraken.width / 2 + horizontalOffset - 4,
+            y: kraken.y + kraken.height * 0.62,
+            width: 8,
+            height: 14,
+            speed: 245,
+            horizontalSpeed
+          });
+        }
+        return;
+      }
+
+      if (invaderState.alive.length === 0) return;
+
+      const shooter = invaderState.alive[Math.floor(Math.random() * invaderState.alive.length)];
+      invaderBullets.push({
+        x: shooter.x + shooter.width / 2 - 2,
+        y: shooter.y + shooter.height,
+        width: 4,
+        height: 12,
+        speed: 220
+      });
+    }
+
+    function updateBullets(deltaTime) {
+      playerShotCooldown = Math.max(0, playerShotCooldown - deltaTime);
+      invaderShotTimer += deltaTime;
+      playerInvulnerableTime = Math.max(0, playerInvulnerableTime - deltaTime);
+
+      if (keys.shoot && playerShotCooldown === 0 && !gameOver) {
+        playerBullets.push({
+          x: ship.x + ship.width / 2 - 2,
+          y: ship.y - 12,
+          width: 4,
+          height: 12,
+          speed: 420
+        });
+        playerShotCooldown = 0.28;
+      }
+
+      if (invaderShotTimer >= 1.1) {
+        fireInvaderBullet();
+        invaderShotTimer = 0;
+      }
+
+      for (let i = playerBullets.length - 1; i >= 0; i--) {
+        const bullet = playerBullets[i];
+        bullet.y -= bullet.speed * deltaTime;
+
+        if (bullet.y + bullet.height < 0) {
+          playerBullets.splice(i, 1);
+          continue;
+        }
+
+        if (bossActive && rectanglesOverlap(bullet, kraken)) {
+          playerBullets.splice(i, 1);
+          kraken.hitsRemaining -= 1;
+
+          if (kraken.hitsRemaining === 0) {
+            saveHighScore();
+            gameWon = true;
+            gameStarted = false;
+            bossActive = false;
+            playerBullets.length = 0;
+            invaderBullets.length = 0;
+            keys.left = false;
+            keys.right = false;
+            keys.shoot = false;
+            return;
+          }
+        } else if (!bossActive) {
+          const hitIndex = invaderState.alive.findIndex((invader) => rectanglesOverlap(bullet, invader));
+          if (hitIndex !== -1) {
+            invaderState.alive.splice(hitIndex, 1);
+            playerBullets.splice(i, 1);
+            score += 1;
+          }
+        }
+      }
+
+      for (let i = invaderBullets.length - 1; i >= 0; i--) {
+        const bullet = invaderBullets[i];
+        bullet.x += (bullet.horizontalSpeed || 0) * deltaTime;
+        bullet.y += bullet.speed * deltaTime;
+
+        if (bullet.y > canvas.height) {
+          invaderBullets.splice(i, 1);
+          continue;
+        }
+
+        if (playerInvulnerableTime === 0 && rectanglesOverlap(bullet, ship)) {
+          invaderBullets.splice(i, 1);
+          lives -= 1;
+          playerInvulnerableTime = 1.2;
+          ship.x = canvas.width / 2 - ship.width / 2;
+          invaderBullets.length = 0;
+
+          if (lives === 0) {
+            gameOver = true;
+            saveHighScore();
+          }
+          break;
+        }
+      }
+    }
+
+    function launchFireworkBurst() {
+      const x = canvas.width * (0.15 + Math.random() * 0.7);
+      const y = canvas.height * (0.12 + Math.random() * 0.34);
+      const colors = ['#FFE66D', '#FF4D4D', '#5DA9FF', '#54E38E', '#FF73D1'];
+
+      for (let i = 0; i < 24; i++) {
+        const angle = (Math.PI * 2 * i) / 24;
+        const speed = 65 + Math.random() * 110;
+        fireworks.push({
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 0.9 + Math.random() * 0.6,
+          color: colors[Math.floor(Math.random() * colors.length)]
+        });
+      }
+    }
+
+    function updateFireworks(deltaTime) {
+      fireworkTimer -= deltaTime;
+      if (fireworkTimer <= 0) {
+        launchFireworkBurst();
+        fireworkTimer = 0.55;
+      }
+
+      for (let i = fireworks.length - 1; i >= 0; i--) {
+        const particle = fireworks[i];
+        particle.x += particle.vx * deltaTime;
+        particle.y += particle.vy * deltaTime;
+        particle.vy += 100 * deltaTime;
+        particle.life -= deltaTime;
+
+        if (particle.life <= 0) {
+          fireworks.splice(i, 1);
+        }
+      }
+    }
+
+    function update(deltaTime) {
+      if (gameWon) {
+        updateFireworks(deltaTime);
+        return;
+      }
+      if (!gameStarted || gameOver) return;
+      updateShip();
+      if (bossActive) {
+        updateKraken(deltaTime);
+      } else {
+        updateInvaders(deltaTime);
+      }
+      updateBullets(deltaTime);
+
+      if (!gameOver && !gameWon && !bossActive && invaderState.alive.length === 0) {
+        startKraken();
+      }
+    }
+
+    function drawKraken() {
+      const pixelSize = 14;
+      const colors = ['#16B8A6', '#0B5963', '#E85D9E'];
+      const pixelRows = [
+        [[8, 12, 0]],
+        [[6, 14, 0]],
+        [[4, 16, 0]],
+        [[3, 17, 0]],
+        [[2, 18, 0]],
+        [[1, 19, 0]],
+        [[0, 20, 0]],
+        [[0, 20, 0]],
+        [[1, 4, 0], [4, 6, 0], [6, 14, 0], [14, 16, 0], [16, 19, 0]],
+        [[1, 3, 1], [4, 6, 0], [7, 13, 0], [14, 16, 0], [17, 19, 1]],
+        [[2, 4, 0], [4, 5, 2], [8, 10, 0], [10, 12, 0], [15, 16, 2], [16, 18, 0]],
+        [[3, 5, 0], [8, 9, 1], [11, 12, 1], [15, 17, 0]],
+        [[4, 6, 0], [7, 9, 0], [11, 13, 0], [14, 16, 0]],
+        [[5, 7, 0], [7, 9, 1], [11, 13, 1], [13, 15, 0]],
+        [[6, 8, 0], [9, 11, 0], [12, 14, 0]]
+      ];
+
+      for (let row = 0; row < pixelRows.length; row++) {
+        for (const [startColumn, endColumn, colorIndex] of pixelRows[row]) {
+          ctx.fillStyle = colors[colorIndex];
+          ctx.fillRect(
+            kraken.x + startColumn * pixelSize,
+            kraken.y + row * pixelSize,
+            (endColumn - startColumn) * pixelSize,
+            pixelSize
+          );
+        }
+      }
+
+      ctx.fillStyle = '#FFE66D';
+      ctx.fillRect(kraken.x + pixelSize * 6, kraken.y + pixelSize * 4, pixelSize * 2, pixelSize * 2);
+      ctx.fillRect(kraken.x + pixelSize * 12, kraken.y + pixelSize * 4, pixelSize * 2, pixelSize * 2);
+      ctx.fillStyle = '#171126';
+      ctx.fillRect(kraken.x + pixelSize * 7, kraken.y + pixelSize * 4, pixelSize, pixelSize * 2);
+      ctx.fillRect(kraken.x + pixelSize * 12, kraken.y + pixelSize * 4, pixelSize, pixelSize * 2);
+
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`KRAKEN - ${kraken.hitsRemaining} HITS LEFT`, kraken.x + kraken.width / 2, kraken.y - 14);
+    }
+
+    function drawEndScreen() {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (gameWon) {
+        for (const particle of fireworks) {
+          ctx.fillStyle = particle.color;
+          ctx.fillRect(Math.round(particle.x), Math.round(particle.y), 5, 5);
+        }
+      }
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 64px "Courier New", monospace';
+      ctx.fillStyle = gameWon ? '#FFE66D' : '#FF3030';
+      ctx.fillText(gameWon ? 'YOU WIN!' : 'YOU LOSE', canvas.width / 2, canvas.height / 2);
+
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.fillStyle = 'white';
+      ctx.fillText(`SCORE: ${score}`, canvas.width / 2, canvas.height / 2 + 48);
+      ctx.fillText(`HIGH SCORE: ${highScore}`, canvas.width / 2, canvas.height / 2 + 80);
+      ctx.fillText('PRESS ANY KEY TO PLAY AGAIN', canvas.width / 2, canvas.height / 2 + 128);
+    }
+
+    function draw() {
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const frameIndex = Math.floor(performance.now() / 180) % 2;
+      for (const invader of invaderState.alive) {
+        drawInvader(invader, frameIndex);
+      }
+
+      if (bossActive) {
+        drawKraken();
+      }
+
+      for (const bullet of playerBullets) {
+        ctx.fillStyle = '#7DF9FF';
+        ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+      }
+
+      for (const bullet of invaderBullets) {
+        ctx.fillStyle = '#FF6B6B';
+        ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
+      }
+
+      if (playerInvulnerableTime === 0 || Math.floor(performance.now() / 100) % 2 === 0) {
+        ctx.fillStyle = 'white';
+        ctx.fillRect(ship.x, ship.y, ship.width, ship.height);
+      }
+
+      ctx.fillStyle = 'white';
+      ctx.font = 'bold 20px "Courier New", monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`Lives: ${lives}`, 16, 28);
+      ctx.textAlign = 'center';
+      ctx.fillText(`High Score: ${highScore}`, canvas.width / 2, 28);
+
+      if (gameStarted && !gameOver) {
+        ctx.textAlign = 'right';
+        ctx.fillText(`Score: ${score}`, canvas.width - 16, 28);
+      }
+
+      if (!gameStarted && !gameOver && !gameWon) {
+        ctx.font = 'bold 24px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(waitingMessage, canvas.width / 2, canvas.height / 2);
+      }
+
+      if (gameOver || gameWon) {
+        drawEndScreen();
+      }
+
+      ctx.fillStyle = '#7DF9FF';
+      ctx.font = 'bold 16px "Courier New", monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('Name: E65Q - Sharon', canvas.width - 12, canvas.height - 10);
+    }
+
+    function gameLoop(timestamp) {
+      if (!gameLoop.lastTime) {
+        gameLoop.lastTime = timestamp;
+      }
+
+      const deltaTime = (timestamp - gameLoop.lastTime) / 1000;
+      gameLoop.lastTime = timestamp;
+
+      update(deltaTime);
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (gameOver || gameWon) {
+        resetGame();
+        gameStarted = true;
+        waitingMessage = 'PRESS ANY KEY TO START';
+      } else if (!gameStarted) {
+        gameStarted = true;
+        waitingMessage = 'PRESS ANY KEY TO START';
+      }
+
+      if (event.key === 'ArrowLeft') {
+        keys.left = true;
+      }
+
+      if (event.key === 'ArrowRight') {
+        keys.right = true;
+      }
+
+      if (event.code === 'Space') {
+        event.preventDefault();
+        keys.shoot = true;
+      }
+    });
+
+    document.addEventListener('keyup', (event) => {
+      if (event.key === 'ArrowLeft') {
+        keys.left = false;
+      }
+
+      if (event.key === 'ArrowRight') {
+        keys.right = false;
+      }
+
+      if (event.code === 'Space') {
+        keys.shoot = false;
+      }
+    });
+
+    createInvaders();
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
